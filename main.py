@@ -18,7 +18,7 @@ import shutil
 import logging
 
 from schema import GenderPrediction, VoiceFeatures
-from predict_gender import engineer_features,create_ann_model
+from predict_gender import engineer_features,create_ann_model, extract_voice_features_from_mp3
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +32,11 @@ import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppresses INFO and WARNING messages
+
+model_age = joblib.load("age_xgb_model.pkl")
+scaler_age = joblib.load("age_scaler.pkl")
+label_encoder_age = joblib.load("age_label_encoder.pkl")
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -50,7 +55,29 @@ app.add_middleware(
 )
 
 # Define input and output models
+def predict_age(features):
+    try:
+        # Extract features in the same order as training
 
+        feature_names = ['meanfreq', 'sd', 'median', 'Q25', 'Q75', 'IQR', 'skew', 'kurt',
+                         'sp.ent', 'sfm', 'mode', 'centroid', 'meanfun', 'minfun', 'maxfun',
+                         'meandom', 'mindom', 'maxdom', 'dfrange', 'modindx']
+
+        X = pd.DataFrame([[features.get(name, 0) for name in feature_names]], columns=feature_names)
+
+        # Scale features
+        X_scaled = scaler_age.transform(X)
+
+        # Predict
+        pred = model_age.predict(X_scaled)
+        age_label = label_encoder_age.inverse_transform(pred)[0]
+
+        return {"predicted_age_group": age_label}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
     
 def predict_with_bagging_ensemble(models, X, n_simulations=30, noise_scale=0.08):
     """
@@ -326,8 +353,11 @@ async def analyze_audio(audio_file: UploadFile = File(...)):
             result = await predict_gender(features_model)
             
             # Add extracted features to response
+            # features_ = await extract_voice_features_from_mp3(audio_file)
+            result_age = predict_age(features)      
             response = {
                 "gender_prediction": result,
+                "age": result_age,
                 "extracted_features": features
             }
             
